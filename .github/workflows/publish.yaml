@@ -28,12 +28,12 @@ jobs:
 
             - name: 📄 Export notebook
               run: |
-                  marimo export html-wasm panel.py -o /dist --mode run
+                  marimo export html-wasm panel.py -o dist --mode run
 
             - name: 📦 Upload Pages Artifact
               uses: actions/upload-pages-artifact@v3
               with:
-                  path: /dist
+                  path: dist
 
     deploy:
         needs: build

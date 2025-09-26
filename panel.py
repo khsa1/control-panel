@@ -9,7 +9,9 @@ def _():
     import marimo as mo
     import requests
     import json
-    return json, mo, requests
+    import httpx
+    from collections import deque
+    return deque, httpx, json, mo, requests
 
 
 @app.cell
@@ -97,16 +99,21 @@ def _(config_payload_box, json):
 
 @app.cell
 def _(mo):
-    startup_button = mo.ui.run_button(label='Startup')
-    configure_button = mo.ui.run_button(label='Configure')
-    run_button = mo.ui.run_button(label='Run')
-    stop_button = mo.ui.run_button(label='Stop')
-    shutdown_button = mo.ui.run_button(label='Shutdown')
+    startup_button = mo.ui.run_button(label='Startup', kind='success')
+    configure_button = mo.ui.run_button(label='Configure', kind='warn')
+    run_button = mo.ui.run_button(label='Run', kind='success')
+    stop_button = mo.ui.run_button(label='Stop', kind='danger')
+    shutdown_button = mo.ui.run_button(label='Shutdown', kind='danger')
     health_button = mo.ui.run_button(label='Check Health')
-    dl_logs_button = mo.ui.run_button(label='Download Logs')
-    dl_config_button = mo.ui.run_button(label='Download Config')
+    dl_logs_button = mo.ui.run_button(label='Controller Logs')
+    dl_config_button = mo.ui.run_button(label='Config')
+    dl_app_out_button = mo.ui.run_button(label='App Stdout')
+    dl_app_err_button = mo.ui.run_button(label='App Stderr')
+    stream_app_button = mo.ui.run_button(label='Stream App')
     return (
         configure_button,
+        dl_app_err_button,
+        dl_app_out_button,
         dl_config_button,
         dl_logs_button,
         health_button,
@@ -114,12 +121,15 @@ def _(mo):
         shutdown_button,
         startup_button,
         stop_button,
+        stream_app_button,
     )
 
 
 @app.cell
 def _(
     configure_button,
+    dl_app_err_button,
+    dl_app_out_button,
     dl_config_button,
     dl_logs_button,
     health_button,
@@ -128,11 +138,14 @@ def _(
     shutdown_button,
     startup_button,
     stop_button,
+    stream_app_button,
 ):
-    mo.vstack([
-    mo.hstack([startup_button, configure_button, run_button, stop_button, shutdown_button], justify='center', gap=1.5),
-    mo.hstack([health_button, dl_logs_button, dl_config_button], justify='center', gap=1.5)
-    ]
+    mo.vstack(
+        [
+            mo.hstack([startup_button, configure_button, run_button, stop_button, shutdown_button], justify='center', gap=1.5),
+            mo.hstack([health_button, dl_logs_button, dl_config_button, dl_app_out_button, dl_app_err_button, stream_app_button], justify='center', gap=1.5)
+        ],           
+        gap=2
     )
     return
 
@@ -145,19 +158,29 @@ def _(default_config_payload, json, mo):
 
 
 @app.cell
+def _():
+    stream_task = None
+    return (stream_task,)
+
+
+@app.cell
 def _(
     config_payload,
     configure_button,
+    dl_app_err_button,
+    dl_app_out_button,
     dl_config_button,
     dl_logs_button,
     file_get_request,
     get_request,
     health_button,
+    launch_stream,
     post_request,
     run_button,
     shutdown_button,
     startup_button,
     stop_button,
+    stream_app_button,
 ):
     mapping = [
         (startup_button, lambda: post_request('startup')),
@@ -165,21 +188,28 @@ def _(
         (run_button, lambda: post_request('run')),
         (stop_button, lambda: post_request('stop')),
         (shutdown_button, lambda: post_request('shutdown')),
-        (dl_logs_button, lambda: file_get_request('dl_controller_logs')),
+        (dl_logs_button, lambda: file_get_request('controller_logs/download')),
         (dl_config_button, lambda: file_get_request('dl_config')),
-        (health_button, lambda: get_request('health'))
+        (health_button, lambda: get_request('health')),
+        (dl_app_out_button, lambda: file_get_request('app_logs/download/stdout')),
+        (dl_app_err_button, lambda: file_get_request('app_logs/download/stderr')),
+        (stream_app_button, lambda: launch_stream())
     ]
     return (mapping,)
 
 
 @app.cell
-def _(json, mapping):
+def _(json, mapping, stream_task):
     response_output = ''
     for button, fhandle in mapping:
         if button.value:
+            if stream_task and not stream_task.done():
+                stream_task.cancel()
             result = fhandle()
             if isinstance(result, dict):
                 response_output = json.dumps(result, indent=2)
+            elif result is None:
+                pass
             else:
                 response_output = str(result)
     return (response_output,)
@@ -195,6 +225,29 @@ def _(mo, response_output):
             rows=10
         )
     return
+
+
+@app.cell
+def _(deque, httpx, response):
+    async def tail_stream(url, n=10):
+        buffer = deque(maxlen=n)
+
+        async with httpx.AsyncClient() as client:
+            response.raise_for_status()
+            async for chunk in response.aiter_text():
+                for line in chunk.splitlines():
+                    buffer.append(line)
+                response_output = "\n".join(buffer)
+
+    return (tail_stream,)
+
+
+@app.cell
+def _(asyncio, controller_ip, stream_task, tail_stream):
+    def launch_stream():
+        if stream_task is None or stream_task.done():
+            stream_task = asyncio.create_task(tail_stream(controller_ip, n=10))
+    return (launch_stream,)
 
 
 @app.cell
